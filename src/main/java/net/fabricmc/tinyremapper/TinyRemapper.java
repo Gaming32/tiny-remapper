@@ -25,6 +25,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.AbstractMap.SimpleImmutableEntry;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -663,6 +664,34 @@ public class TinyRemapper {
 
 				fieldMap.put(field.owner+"/"+MemberInstance.getFieldId(field.name, field.desc, ignoreFieldDesc), dstName);
 			}
+
+			@Override
+			public void acceptInnerClass(String containerClassName, String outerClassName, String innerClassName, int access) {
+				if (outerClassName == null) throw new NullPointerException("null outerClass name");
+				if (innerClassName == null) throw new NullPointerException("null innerClass name");
+
+				innerClassMap.computeIfAbsent(outerClassName, k -> new ArrayList<>())
+						.add(new SimpleImmutableEntry<>(outerClassName, innerClassName + ":" + access));
+			}
+
+			@Override
+			public void acceptClassSignature(String className, String signature) {
+				if (className == null) throw new NullPointerException("null class name");
+				if (signature == null) throw new NullPointerException("null class signature");
+
+				classSignatureMap.put(className, signature);
+			}
+
+			@Override
+			public void acceptMemberSignature(Member member, String signature) {
+				if (member == null) throw new NullPointerException("null member");
+				if (signature == null) throw new NullPointerException("null member signature");
+
+				memberSignatureMap.put(MemberInstance.getId(
+						member.desc.startsWith("(") ? TrMember.MemberType.METHOD : TrMember.MemberType.FIELD,
+						member.name, member.desc, ignoreFieldDesc
+				), signature);
+			}
 		};
 
 		for (IMappingProvider provider : mappingProviders) {
@@ -1064,8 +1093,49 @@ public class TinyRemapper {
 			visitor = postApplyVisitors.get(i).insertApplyVisitor(cls, visitor);
 		}
 
-		visitor = new AsmClassRemapper(visitor, cls.getContext().remapper, rebuildSourceFilenames,
+		AsmRemapper remapper = cls.getContext().remapper;
+		visitor = new AsmClassRemapper(visitor, remapper, rebuildSourceFilenames,
 				checkPackageAccess, skipLocalMapping, renameInvalidLocals, invalidLvNamePattern, inferNameFromSameLvIndex);
+
+		visitor = new ClassVisitor(Opcodes.ASM9, visitor) {
+			@Override
+			public void visit(int version, int access, String name, String signature, String superName,
+					String[] interfaces) {
+				String classSignature = classSignatureMap.get(cls.getName());
+				if (classSignature != null) signature = classSignature;
+
+				super.visit(version, access, name, signature, superName, interfaces);
+				List<Map.Entry<String, String>> innerClasses = innerClassMap.get(cls.getName());
+
+				if (innerClasses != null) {
+					for (Map.Entry<String, String> innerClass : innerClasses) {
+						String outerClassName = innerClass.getKey();
+						String innerClassNameAndAccess = innerClass.getValue();
+						int colonIndex = innerClassNameAndAccess.lastIndexOf(':');
+						String innerClassName = innerClassNameAndAccess.substring(0, colonIndex);
+						int innerAccess = Integer.parseInt(innerClassNameAndAccess.substring(colonIndex + 1));
+						visitInnerClass(innerClassName, outerClassName, innerClassName, innerAccess);
+					}
+				}
+			}
+
+			@Override
+			public FieldVisitor visitField(int access, String name, String descriptor, String signature, Object value) {
+				String fieldSignature = memberSignatureMap.get(MemberInstance.getFieldId(name, descriptor, ignoreFieldDesc));
+				if (fieldSignature != null) signature = fieldSignature;
+
+				return super.visitField(access, name, descriptor, signature, value);
+			}
+
+			@Override
+			public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
+					String[] exceptions) {
+				String methodSignature = memberSignatureMap.get(MemberInstance.getMethodId(name, descriptor));
+				if (methodSignature != null) signature = methodSignature;
+
+				return super.visitMethod(access, name, descriptor, signature, exceptions);
+			}
+		};
 
 		for (int i = preApplyVisitors.size() - 1; i >= 0; i--) {
 			visitor = preApplyVisitors.get(i).insertApplyVisitor(cls, visitor);
@@ -1343,6 +1413,9 @@ public class TinyRemapper {
 	final Map<String, String> methodMap = new HashMap<>();
 	final Map<String, String> methodArgMap = new HashMap<>();
 	final Map<String, String> fieldMap = new HashMap<>();
+	final Map<String, List<Map.Entry<String, String>>> innerClassMap = new HashMap<>();
+	final Map<String, String> classSignatureMap = new HashMap<>();
+	final Map<String, String> memberSignatureMap = new HashMap<>();
 	final Map<MemberInstance, Set<String>> conflicts = new ConcurrentHashMap<>();
 	final Set<ClassInstance> classesToMakePublic = Collections.newSetFromMap(new ConcurrentHashMap<>());
 	final Set<MemberInstance> membersToMakePublic = Collections.newSetFromMap(new ConcurrentHashMap<>());

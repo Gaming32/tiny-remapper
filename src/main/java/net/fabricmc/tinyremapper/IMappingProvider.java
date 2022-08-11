@@ -28,6 +28,9 @@ public interface IMappingProvider {
 		void acceptMethodArg(Member method, int lvIndex, String dstName);
 		void acceptMethodVar(Member method, int lvIndex, int startOpIdx, int asmIndex, String dstName);
 		void acceptField(Member field, String dstName);
+		void acceptInnerClass(String containerClassName, String outerClassName, String innerClassName, int access);
+		void acceptClassSignature(String className, String signature);
+		void acceptMemberSignature(Member member, String signature);
 	}
 
 	final class Member {

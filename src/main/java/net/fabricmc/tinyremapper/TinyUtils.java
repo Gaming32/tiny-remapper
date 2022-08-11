@@ -165,6 +165,21 @@ public final class TinyUtils {
 				fieldMappings.add(new MemberMapping(field, dstName));
 				members.add(field);
 			}
+
+			@Override
+			public void acceptInnerClass(String containerClassName, String outerClassName, String innerClassName, int access) {
+				out.acceptInnerClass(containerClassName, outerClassName, innerClassName, access);
+			}
+
+			@Override
+			public void acceptClassSignature(String className, String signature) {
+				out.acceptClassSignature(className, signature);
+			}
+
+			@Override
+			public void acceptMemberSignature(Member member, String signature) {
+				out.acceptMemberSignature(member, signature);
+			}
 		};
 
 		TinyUtils.read(reader, fromM, toM,
@@ -352,6 +367,18 @@ public final class TinyUtils {
 							out.acceptField(member, mappedName);
 						}
 					}
+				} else if (inClass && section.equals("s")) { // class signature: s <sigA>
+					if (parts.length != 2) throw new IOException("invalid class signature decl in line "+lineNumber);
+
+					String signature = unescapeOpt(parts[1], escapedNames);
+					if (!signature.isEmpty()) out.acceptClassSignature(className, signature);
+				} else if (inClass && section.equals("i")) { // inner class: i <outer-class-a> <inner-class-a> <access>
+					if (parts.length != 4) throw new IOException("invalid inner class decl in line "+lineNumber);
+
+					String outerClassName = unescapeOpt(parts[1], escapedNames);
+					String innerClassName = unescapeOpt(parts[2], escapedNames);
+					int access = Integer.decode(parts[3]);
+					if (!innerClassName.isEmpty()) out.acceptInnerClass(className, outerClassName, innerClassName, access);
 				}
 			} else if (indent == 2) {
 				if (inMethod && section.equals("p")) { // method parameter: p <lv-index> <names>...
@@ -368,6 +395,11 @@ public final class TinyUtils {
 					varLvtIndex = Integer.parseInt(parts[3]);
 					String mappedName = unescapeOpt(parts[4 + nsB], escapedNames);
 					if (!mappedName.isEmpty()) out.acceptMethodVar(member, varLvIndex, varStartOpIdx, varLvtIndex, mappedName);
+				} else if (section.equals("s")) { // method/field signature: s <sigA>
+					if (parts.length != 2) throw new IOException("invalid "+(inMethod ? "method" : "field")+" signature decl in line "+lineNumber);
+
+					String signature = unescapeOpt(parts[1], escapedNames);
+					if (!signature.isEmpty()) out.acceptMemberSignature(member, signature);
 				}
 			}
 		}
